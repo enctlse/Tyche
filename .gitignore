@@ -1,0 +1,5 @@
+*.o
+tyche
+*.bin
+test*
+TEST*

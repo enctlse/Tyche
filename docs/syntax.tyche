@@ -1,0 +1,56 @@
+// Файл: docs/syntax_v2.tyche
+
+=== Tyche Language Syntax v2 ===
+
+1. Комментарии:
+   // Однострочный
+   /* Многострочный */
+
+2. Переменные (с явными типами):
+   let x: int = 10;
+   let name: string = "Tyche";
+   let active: bool = true;
+   let pi: float = 3.14;
+
+3. Математические операции:
+   let a: int = 10 + 5 * 2;      // 20
+   let b: float = (10.5 + 2.3) / 2.0;
+   let c: int = a % 3;           // остаток от деления
+
+4. Условия:
+   if x > 10 {
+       print("Больше 10");
+   } else if x < 5 {
+       print("Меньше 5");
+   } else {
+       print("Между 5 и 10");
+   }
+
+5. Циклы:
+   let i: int = 0;
+   while i < 10 {
+       print(i);
+       i = i + 1;
+   }
+
+   for j in 0..10 {
+       print(j * 2);
+   }
+
+6. Функции:
+   func add(a: int, b: int) -> int {
+       return a + b;
+   }
+   
+   func greet(name: string) -> void {
+       print("Hello, " + name);
+   }
+
+7. Структуры:
+   struct Point {
+       x: int;
+       y: int;
+   }
+   
+   let p: Point = Point { x: 10, y: 20 };
+   print(p.x);
