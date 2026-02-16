@@ -7,13 +7,20 @@ error_syntax db 'Syntax error at line ', 0
 error_undefined_var db 'Error: undefined variable at line ', 0
 success db 'Compiled! Run: chmod +x <output> && ./<output>', 10, 0
 line_num_str db '000', 10, 0
-newline db 10, 0
 
-TYPE_INT     equ 1
-TYPE_DOUBLE  equ 2
-TYPE_STRING  equ 3
-TYPE_FLOAT   equ 4
-TYPE_BOOL    equ 5
+TYPE_INT equ 1
+TYPE_STRING equ 2
+
+OP_EQ equ 1
+OP_NE equ 2
+OP_GT equ 3
+OP_LT equ 4
+OP_GE equ 5
+OP_LE equ 6
+
+BLOCK_GLOBAL equ 0
+BLOCK_IF equ 1
+BLOCK_ELSE equ 2
 
 elf_header:
     db 0x7F, 'E', 'L', 'F'
@@ -47,36 +54,37 @@ msg_len dq 0
 kw_print db 'print', 0
 kw_let db 'let', 0
 kw_if db 'if', 0
-kw_while db 'while', 0
 kw_int db 'int', 0
 kw_string db 'string', 0
-kw_double db 'double', 0
-kw_float db 'float', 0
-kw_bool db 'bool', 0
-kw_true db 'true', 0
-kw_false db 'false', 0
 kw_else db 'else', 0
 
 current_token times 64 db 0
 
 sym_names times 32*32 db 0
 sym_values times 32 dq 0
-sym_types  times 32 dq 0
+sym_types times 32 dq 0
 sym_count dq 0
 
 header_size equ 120
 entry_vaddr dq 0x400000 + header_size
 
 section .bss
-input_file: resq 1
-output_file: resq 1
-input_fd: resq 1
-output_fd: resq 1
-file_buffer: resb 8192
+input_file resq 1
+output_file resq 1
+input_fd resq 1
+output_fd resq 1
+file_buffer resb 8192
 
-src_ptr: resq 1
-line_number: resd 1
-had_parentheses: resb 1
+src_ptr resq 1
+line_number resd 1
+had_parentheses resb 1
+current_block resb 1
+
+cond_left resq 1
+cond_right resq 1
+cond_operator resb 1
+if_jump_patch resq 1
+else_jump_patch resq 1
 
 code_buffer resb 8192
 data_buffer resb 8192
@@ -85,12 +93,9 @@ data_ptr resq 1
 code_size resq 1
 data_size resq 1
 
-patch_addrs resq 64
-patch_offsets resq 64
+patch_addrs resb 512
+patch_offsets resb 512
 patch_count resq 1
-
-if_stack resq 32
-if_stack_ptr resq 1
 
 section .text
 global _start
@@ -117,7 +122,7 @@ _start:
     mov rax, 1
     mov rdi, 1
     mov rsi, success
-    mov rdx, 65
+    mov rdx, 50
     syscall
     
     mov rax, 60
@@ -128,7 +133,7 @@ _start:
     mov rax, 1
     mov rdi, 1
     mov rsi, error_no_args
-    mov rdx, 51
+    mov rdx, 40
     syscall
     mov rax, 60
     mov rdi, 1
@@ -174,16 +179,226 @@ read_input_file:
     mov rax, -1
     ret
 
+parse_condition:
+    mov rsi, [src_ptr]
+    call skip_whitespace
+    mov [src_ptr], rsi
+    
+    mov al, [rsi]
+    cmp al, '0'
+    jb .cond_var
+    cmp al, '9'
+    ja .cond_var
+
+.cond_number:
+    xor rax, rax
+    
+.parse_num:
+    mov cl, [rsi]
+    cmp cl, '0'
+    jb .num_done
+    cmp cl, '9'
+    ja .num_done
+    sub cl, '0'
+    imul rax, 10
+    add rax, rcx
+    inc rsi
+    jmp .parse_num
+    
+.num_done:
+    mov [src_ptr], rsi
+    mov [cond_left], rax
+    jmp .cond_get_operator
+
+.cond_var:
+    mov rdi, current_token
+    xor rcx, rcx
+    
+.copy_var_cond:
+    mov al, [rsi]
+    cmp al, ' '
+    je .var_cond_done
+    cmp al, 9
+    je .var_cond_done
+    cmp al, 10
+    je .var_cond_done
+    cmp al, '='
+    je .var_cond_done
+    cmp al, '!'
+    je .var_cond_done
+    cmp al, '>'
+    je .var_cond_done
+    cmp al, '<'
+    je .var_cond_done
+    cmp al, 0
+    je .var_cond_done
+    
+    mov [rdi], al
+    inc rsi
+    inc rdi
+    inc rcx
+    cmp rcx, 63
+    jge .var_cond_done
+    jmp .copy_var_cond
+    
+.var_cond_done:
+    mov byte [rdi], 0
+    mov [src_ptr], rsi
+    
+    mov rdi, current_token
+    call find_symbol
+    cmp rax, -1
+    je .cond_error
+    
+    mov rcx, rax
+    shl rcx, 3
+    mov rax, [sym_values + rcx]
+    mov [cond_left], rax
+    
+.cond_get_operator:
+    mov rsi, [src_ptr]
+    call skip_whitespace
+    mov [src_ptr], rsi
+    
+    mov al, [rsi]
+    cmp al, '='
+    je .op_eq_check
+    cmp al, '!'
+    je .op_ne_check
+    cmp al, '>'
+    je .op_gt_check
+    cmp al, '<'
+    je .op_lt_check
+    jmp .cond_error
+
+.op_eq_check:
+    inc rsi
+    cmp byte [rsi], '='
+    jne .cond_error
+    inc rsi
+    mov byte [cond_operator], OP_EQ
+    jmp .cond_get_right
+
+.op_ne_check:
+    inc rsi
+    cmp byte [rsi], '='
+    jne .cond_error
+    inc rsi
+    mov byte [cond_operator], OP_NE
+    jmp .cond_get_right
+
+.op_gt_check:
+    inc rsi
+    cmp byte [rsi], '='
+    je .op_ge
+    mov byte [cond_operator], OP_GT
+    jmp .cond_get_right
+.op_ge:
+    inc rsi
+    mov byte [cond_operator], OP_GE
+    jmp .cond_get_right
+
+.op_lt_check:
+    inc rsi
+    cmp byte [rsi], '='
+    je .op_le
+    mov byte [cond_operator], OP_LT
+    jmp .cond_get_right
+.op_le:
+    inc rsi
+    mov byte [cond_operator], OP_LE
+    
+.cond_get_right:
+    mov [src_ptr], rsi
+    call skip_whitespace
+    mov [src_ptr], rsi
+    
+    mov al, [rsi]
+    cmp al, '0'
+    jb .right_var
+    cmp al, '9'
+    ja .right_var
+    
+.right_number:
+    xor rax, rax
+    
+.parse_right:
+    mov cl, [rsi]
+    cmp cl, '0'
+    jb .right_num_done
+    cmp cl, '9'
+    ja .right_num_done
+    sub cl, '0'
+    imul rax, 10
+    add rax, rcx
+    inc rsi
+    jmp .parse_right
+    
+.right_num_done:
+    mov [src_ptr], rsi
+    mov [cond_right], rax
+    jmp .cond_check_close
+
+.right_var:
+    mov rdi, current_token
+    xor rcx, rcx
+    
+.copy_var_right:
+    mov al, [rsi]
+    cmp al, ' '
+    je .var_right_done
+    cmp al, 9
+    je .var_right_done
+    cmp al, 10
+    je .var_right_done
+    cmp al, ')'
+    je .var_right_done
+    cmp al, 0
+    je .var_right_done
+    
+    mov [rdi], al
+    inc rsi
+    inc rdi
+    inc rcx
+    cmp rcx, 63
+    jge .var_right_done
+    jmp .copy_var_right
+    
+.var_right_done:
+    mov byte [rdi], 0
+    mov [src_ptr], rsi
+    
+    mov rdi, current_token
+    call find_symbol
+    cmp rax, -1
+    je .cond_error
+    
+    mov rcx, rax
+    shl rcx, 3
+    mov rax, [sym_values + rcx]
+    mov [cond_right], rax
+
+.cond_check_close:
+    mov rsi, [src_ptr]
+    call skip_whitespace
+    mov [src_ptr], rsi
+    
+    cmp byte [rsi], ')'
+    jne .cond_error
+    inc rsi
+    mov [src_ptr], rsi
+    mov rax, 1
+    ret
+
+.cond_error:
+    xor rax, rax
+    ret
+
 compile_program:
     mov qword [code_ptr], code_buffer
     mov qword [data_ptr], data_buffer
     mov qword [patch_count], 0
     mov qword [sym_count], 0
-    
-    mov rdi, [data_ptr]
-    mov byte [rdi], 10
-    inc rdi
-    mov [data_ptr], rdi
 
 .compile_loop:
     mov rsi, [src_ptr]
@@ -192,6 +407,9 @@ compile_program:
     cmp byte [rsi], 0
     je .compile_done
     
+    cmp byte [rsi], '}'
+    je .handle_close_brace
+    
     call parse_token
     
     mov rdi, current_token
@@ -199,58 +417,37 @@ compile_program:
     mov rsi, kw_print
     call compare_string
     cmp rax, 1
-    je .handle_print
+    je .handle_print_wrapper
     
     mov rdi, current_token
     mov rsi, kw_let
     call compare_string
     cmp rax, 1
-    je .handle_let
+    je .handle_let_wrapper
     
     mov rdi, current_token
     mov rsi, kw_int
     call compare_string
     cmp rax, 1
-    je .handle_type_direct
+    je .handle_let_wrapper
     
     mov rdi, current_token
     mov rsi, kw_string
     call compare_string
     cmp rax, 1
-    je .handle_type_direct
+    je .handle_let
     
     mov rdi, current_token
-    mov rsi, kw_double
-    call compare_string
-    cmp rax, 1
-    je .handle_type_direct
-    
-    mov rdi, current_token
-    mov rsi, kw_float
-    call compare_string
-    cmp rax, 1
-    je .handle_type_direct
-    
-    mov rdi, current_token
-    mov rsi, kw_bool
-    call compare_string
-    cmp rax, 1
-    je .handle_type_direct
-    
     mov rsi, kw_if
     call compare_string
     cmp rax, 1
     je .handle_if
     
-    mov rsi, kw_while
-    call compare_string
-    cmp rax, 1
-    je .handle_while
-    
     jmp .syntax_error
 
-.handle_type_direct:
-    jmp .handle_let_skip_token
+.handle_print_wrapper:
+    call .handle_print
+    jmp .compile_loop
 
 .handle_print:
     mov rsi, [src_ptr]
@@ -268,7 +465,7 @@ compile_program:
 .print_no_paren:
     mov [src_ptr], rsi
     cmp byte [rsi], '"'
-    je .handle_string_print
+    je .handle_string
     
     mov rdi, current_token
     xor rcx, rcx
@@ -276,29 +473,29 @@ compile_program:
 .copy_var_name_print:
     mov al, [rsi]
     cmp al, ' '
-    je .var_name_done_print
+    je .var_name_done
     cmp al, 9
-    je .var_name_done_print
+    je .var_name_done
     cmp al, 10
-    je .var_name_done_print
+    je .var_name_done
     cmp al, 13
-    je .var_name_done_print
+    je .var_name_done
     cmp al, ')'
-    je .var_name_done_print
+    je .var_name_done
     cmp al, ';'
-    je .var_name_done_print
+    je .var_name_done
     cmp al, 0
-    je .var_name_done_print
+    je .var_name_done
     
     mov [rdi], al
     inc rsi
     inc rdi
     inc rcx
     cmp rcx, 63
-    jge .var_name_done_print
+    jge .var_name_done
     jmp .copy_var_name_print
 
-.var_name_done_print:
+.var_name_done:
     mov byte [rdi], 0
     mov [src_ptr], rsi
     
@@ -309,53 +506,15 @@ compile_program:
     
     mov rcx, rax
     shl rcx, 3
-    push rcx
     mov rax, [sym_values + rcx]
-    mov rdx, [sym_types + rcx]
     
-    cmp rdx, TYPE_STRING
-    je .print_string_var
-    cmp rdx, TYPE_DOUBLE
-    je .print_double_var
-    cmp rdx, TYPE_FLOAT
-    je .print_float_var
-    cmp rdx, TYPE_BOOL
-    je .print_bool_var
-    
-    jmp .print_int_var
-
-.print_string_var:
-    pop rcx
-    mov r11, rax
-    mov r8, rax
-    add r8, data_buffer
-    mov rsi, r8
-    xor rcx, rcx
-.str_len_loop_print:
-    mov al, [rsi + rcx]
-    test al, al
-    jz .str_len_done_print
-    inc rcx
-    jmp .str_len_loop_print
-.str_len_done_print:
-    mov r9, rcx
-    
-    mov rax, r8
-    sub rax, data_buffer
-    mov r8, rax
-    
-    call generate_write
-    
-    jmp .print_continue
-
-.print_int_var:
-    pop rcx
     call number_to_string
     
     mov byte [rdi + rcx], 10
     inc rcx
     mov [msg_len], rcx
     
+    push rsi
     mov rsi, rdi
     mov rdi, [data_ptr]
     mov r8, [data_ptr]
@@ -366,121 +525,31 @@ compile_program:
     mov [data_ptr], rdi
     
     call generate_write
-    jmp .print_continue
-
-.print_double_var:
-    pop rcx
-    mov r8, rax
-    add r8, data_buffer
-    mov rsi, r8
-    xor rcx, rcx
-.double_len_loop_print:
-    mov al, [rsi + rcx]
-    test al, al
-    jz .double_len_done_print
-    inc rcx
-    jmp .double_len_loop_print
-.double_len_done_print:
-    mov r9, rcx
     
-    mov rax, r8
-    sub rax, data_buffer
-    mov r8, rax
-    
-    call generate_write
-    
-    jmp .print_continue
-
-.print_float_var:
-    pop rcx
-    mov r8, rax
-    add r8, data_buffer
-    mov rsi, r8
-    xor rcx, rcx
-.float_len_loop_print:
-    mov al, [rsi + rcx]
-    test al, al
-    jz .float_len_done_print
-    inc rcx
-    jmp .float_len_loop_print
-.float_len_done_print:
-    mov r9, rcx
-    
-    mov rax, r8
-    sub rax, data_buffer
-    mov r8, rax
-    
-    call generate_write
-    
-    jmp .print_continue
-
-.print_bool_var:
-    pop rcx
-    cmp rax, 1
-    je .print_true
-    
-    mov rsi, msg
-    mov byte [rsi], 'f'
-    mov byte [rsi+1], 'a'
-    mov byte [rsi+2], 'l'
-    mov byte [rsi+3], 's'
-    mov byte [rsi+4], 'e'
-    mov byte [rsi+5], 10
-    mov r9, 6
-    
-    mov r8, [data_ptr]
-    sub r8, data_buffer
-    mov rdi, [data_ptr]
-    mov rcx, r9
-    rep movsb
-    mov [data_ptr], rdi
-    
-    call generate_write
-    jmp .print_continue
-
-.print_true:
-    mov rsi, msg
-    mov byte [rsi], 't'
-    mov byte [rsi+1], 'r'
-    mov byte [rsi+2], 'u'
-    mov byte [rsi+3], 'e'
-    mov byte [rsi+4], 10
-    mov r9, 5
-    
-    mov r8, [data_ptr]
-    sub r8, data_buffer
-    mov rdi, [data_ptr]
-    mov rcx, r9
-    rep movsb
-    mov [data_ptr], rdi
-    
-    call generate_write
-    jmp .print_continue
-
-.print_continue:
-    mov rsi, [src_ptr]
+    pop rsi
+    mov [src_ptr], rsi
     call skip_whitespace
     mov [src_ptr], rsi
     jmp .print_end
 
-.handle_string_print:
+.handle_string:
     inc rsi
     mov rdi, msg
     xor rcx, rcx
 
-.copy_string_print:
+.copy_string:
     mov al, [rsi]
     cmp al, '"'
-    je .string_end_print
+    je .string_end
     test al, al
     jz .syntax_error
     mov [rdi], al
     inc rsi
     inc rdi
     inc rcx
-    jmp .copy_string_print
+    jmp .copy_string
 
-.string_end_print:
+.string_end:
     mov byte [rdi], 10
     inc rcx
     mov [msg_len], rcx
@@ -522,104 +591,14 @@ compile_program:
     inc rsi
     
     mov [src_ptr], rsi
+    
+    ret
+
+.handle_let_wrapper:
+    call .handle_let
     jmp .compile_loop
 
-.handle_let_skip_token:
-    jmp .handle_let_process_type
-
 .handle_let:
-    mov rsi, [src_ptr]
-    call skip_whitespace
-    mov [src_ptr], rsi
-    
-    mov rdi, current_token
-    xor rcx, rcx
-
-.copy_type_or_name:
-    mov al, [rsi]
-    
-    cmp al, ' '
-    je .type_done
-    cmp al, 9
-    je .type_done
-    cmp al, 10
-    je .type_done
-    cmp al, 13
-    je .type_done
-    cmp al, '='
-    je .type_done
-    cmp al, ';'
-    je .type_done
-    cmp al, 0
-    je .type_done
-    
-    mov [rdi], al
-    inc rsi
-    inc rdi
-    inc rcx
-    cmp rcx, 63
-    jge .type_done
-    jmp .copy_type_or_name
-
-.type_done:
-    mov byte [rdi], 0
-    mov [src_ptr], rsi
-    
-.handle_let_process_type:
-    mov rdi, current_token
-    mov rsi, kw_int
-    call compare_string
-    cmp rax, 1
-    je .type_int_found
-    
-    mov rdi, current_token
-    mov rsi, kw_string
-    call compare_string
-    cmp rax, 1
-    je .type_string_found
-    
-    mov rdi, current_token
-    mov rsi, kw_double
-    call compare_string
-    cmp rax, 1
-    je .type_double_found
-    
-    mov rdi, current_token
-    mov rsi, kw_float
-    call compare_string
-    cmp rax, 1
-    je .type_float_found
-    
-    mov rdi, current_token
-    mov rsi, kw_bool
-    call compare_string
-    cmp rax, 1
-    je .type_bool_found
-    
-    mov r12, TYPE_INT
-    jmp .process_variable_name
-
-.type_int_found:
-    mov r12, TYPE_INT
-    jmp .read_var_name
-
-.type_string_found:
-    mov r12, TYPE_STRING
-    jmp .read_var_name
-
-.type_double_found:
-    mov r12, TYPE_DOUBLE
-    jmp .read_var_name
-
-.type_float_found:
-    mov r12, TYPE_FLOAT
-    jmp .read_var_name
-
-.type_bool_found:
-    mov r12, TYPE_BOOL
-    jmp .read_var_name
-
-.read_var_name:
     mov rsi, [src_ptr]
     call skip_whitespace
     mov [src_ptr], rsi
@@ -656,15 +635,14 @@ compile_program:
 .name_done:
     mov byte [rdi], 0
     mov [src_ptr], rsi
-
-.process_variable_name:
+    
     mov rdi, current_token
     call add_symbol
     mov rbx, rax
     
     mov rcx, rbx
     shl rcx, 3
-    mov [sym_types + rcx], r12
+    mov qword [sym_types + rcx], TYPE_INT
     
     mov rsi, [src_ptr]
     call skip_whitespace
@@ -676,405 +654,29 @@ compile_program:
     call skip_whitespace
     mov [src_ptr], rsi
     
-    cmp r12, TYPE_STRING
-    je .parse_string_value
-    cmp r12, TYPE_DOUBLE
-    je .parse_double_value
-    cmp r12, TYPE_FLOAT
-    je .parse_float_value
-    cmp r12, TYPE_BOOL
-    je .parse_bool_value
-    
-    jmp .parse_int_value
-
-.parse_string_value:
-    mov rsi, [src_ptr]
-    cmp byte [rsi], '"'
-    jne .syntax_error
-    inc rsi
-    mov rdi, msg
+    xor rax, rax
     xor rcx, rcx
-.string_copy_loop:
-    mov al, [rsi]
-    cmp al, '"'
-    je .string_value_done
-    test al, al
-    jz .syntax_error
-    mov [rdi], al
+
+.parse_number:
+    mov cl, [rsi]
+    cmp cl, '0'
+    jb .number_done
+    cmp cl, '9'
+    ja .number_done
+    
+    sub cl, '0'
+    imul rax, 10
+    add rax, rcx
     inc rsi
-    inc rdi
-    inc rcx
-    jmp .string_copy_loop
-.string_value_done:
-    push rsi
-    
-    mov rdx, [data_ptr]
-    mov r8, rdx
-    sub r8, data_buffer
-    mov rsi, msg
-    mov rdi, [data_ptr]
-    mov r9, rcx
-    mov rcx, r9
-    rep movsb
-    
-    mov byte [rdi], 0
-    inc rdi
-    mov [data_ptr], rdi
-    
+    jmp .parse_number
+
+.number_done:
+    mov rdi, sym_values
     mov rcx, rbx
     shl rcx, 3
-    mov rax, r8
-    mov [sym_values + rcx], rax
-    
-    pop rsi
-    inc rsi
-    mov [src_ptr], rsi
-    jmp .finish_let
-
-.parse_int_value:
-    mov rsi, [src_ptr]
-    xor rax, rax
-    xor rcx, rcx
-.parse_int_loop:
-    mov cl, [rsi]
-    cmp cl, '0'
-    jb .int_value_done
-    cmp cl, '9'
-    ja .int_value_done
-    sub cl, '0'
-    imul rax, 10
-    add rax, rcx
-    inc rsi
-    jmp .parse_int_loop
-.int_value_done:
-    push rax
-    
-    mov rdx, rsi
-    call skip_whitespace
-    mov [src_ptr], rsi
-    
-    cmp byte [rsi], '+'
-    je .do_parse_add
-    cmp byte [rsi], '-'
-    je .do_parse_sub
-    cmp byte [rsi], '*'
-    je .do_parse_mul
-    cmp byte [rsi], '/'
-    je .do_parse_div
-    cmp byte [rsi], '%'
-    je .do_parse_mod
-    
-    pop rax
-    mov rcx, rbx
-    shl rcx, 3
-    mov [sym_values + rcx], rax
-    mov [src_ptr], rsi
-    jmp .finish_let
-
-.do_parse_add:
-    pop rax
-    jmp .parse_add
-
-.do_parse_sub:
-    pop rax
-    jmp .parse_sub
-
-.do_parse_mul:
-    pop rax
-    jmp .parse_mul
-
-.do_parse_div:
-    pop rax
-    jmp .parse_div
-
-.do_parse_mod:
-    pop rax
-    jmp .parse_mod
-
-.parse_add:
-    mov r12, rax
-    
-    inc rsi
-    call skip_whitespace
-    mov [src_ptr], rsi
-    
-    xor rax, rax
-    xor rcx, rcx
-.parse_add_loop:
-    mov cl, [rsi]
-    cmp cl, '0'
-    jb .parse_add_done
-    cmp cl, '9'
-    ja .parse_add_done
-    sub cl, '0'
-    imul rax, 10
-    add rax, rcx
-    inc rsi
-    jmp .parse_add_loop
-.parse_add_done:
-    add r12, rax
-    mov rax, r12
-    mov [src_ptr], rsi
-    jmp .int_value_done
-
-.parse_sub:
-    mov r12, rax
-    
-    inc rsi
-    call skip_whitespace
-    mov [src_ptr], rsi
-    
-    xor rax, rax
-    xor rcx, rcx
-.parse_sub_loop:
-    mov cl, [rsi]
-    cmp cl, '0'
-    jb .parse_sub_done
-    cmp cl, '9'
-    ja .parse_sub_done
-    sub cl, '0'
-    imul rax, 10
-    add rax, rcx
-    inc rsi
-    jmp .parse_sub_loop
-.parse_sub_done:
-    sub r12, rax
-    mov rax, r12
-    mov [src_ptr], rsi
-    jmp .int_value_done
-
-.parse_mul:
-    mov r12, rax
-    
-    inc rsi
-    call skip_whitespace
-    mov [src_ptr], rsi
-    
-    xor rax, rax
-    xor rcx, rcx
-.parse_mul_loop:
-    mov cl, [rsi]
-    cmp cl, '0'
-    jb .parse_mul_done
-    cmp cl, '9'
-    ja .parse_mul_done
-    sub cl, '0'
-    imul rax, 10
-    add rax, rcx
-    inc rsi
-    jmp .parse_mul_loop
-.parse_mul_done:
-    imul r12, rax
-    mov rax, r12
-    mov [src_ptr], rsi
-    jmp .int_value_done
-
-.parse_div:
-    mov r12, rax
-    
-    inc rsi
-    call skip_whitespace
-    mov [src_ptr], rsi
-    
-    xor rax, rax
-    xor rcx, rcx
-.parse_div_loop:
-    mov cl, [rsi]
-    cmp cl, '0'
-    jb .parse_div_done
-    cmp cl, '9'
-    ja .parse_div_done
-    sub cl, '0'
-    imul rax, 10
-    add rax, rcx
-    inc rsi
-    jmp .parse_div_loop
-.parse_div_done:
-    mov r13, rax
-    xor rdx, rdx
-    cmp r13, 0
-    je .div_by_zero_error
-    mov rax, r12
-    div r13
-    mov [src_ptr], rsi
-    jmp .int_value_done
-
-.div_by_zero_error:
-    jmp .syntax_error
-
-.parse_mod:
-    mov r12, rax
-    
-    inc rsi
-    call skip_whitespace
-    mov [src_ptr], rsi
-    
-    xor rax, rax
-    xor rcx, rcx
-.parse_mod_loop:
-    mov cl, [rsi]
-    cmp cl, '0'
-    jb .parse_mod_done
-    cmp cl, '9'
-    ja .parse_mod_done
-    sub cl, '0'
-    imul rax, 10
-    add rax, rcx
-    inc rsi
-    jmp .parse_mod_loop
-.parse_mod_done:
-    mov r13, rax
-    xor rdx, rdx
-    cmp r13, 0
-    je .div_by_zero_error
-    mov rax, r12
-    div r13
-    mov rax, rdx
+    mov [rdi + rcx], rax
     
     mov [src_ptr], rsi
-    jmp .int_value_done
-
-.parse_double_value:
-    mov rsi, [src_ptr]
-    mov rdi, msg
-    xor rcx, rcx
-.copy_double_chars:
-    mov al, [rsi]
-    cmp al, ' '
-    je .double_value_done
-    cmp al, 9
-    je .double_value_done
-    cmp al, 10
-    je .double_value_done
-    cmp al, 13
-    je .double_value_done
-    cmp al, ';'
-    je .double_value_done
-    cmp al, 0
-    je .double_value_done
-    cmp al, '-'
-    je .copy_double_char
-    cmp al, '.'
-    je .copy_double_char
-    cmp al, '0'
-    jb .double_value_done
-    cmp al, '9'
-    ja .double_value_done
-.copy_double_char:
-    mov [rdi], al
-    inc rdi
-    inc rsi
-    inc rcx
-    cmp rcx, 63
-    jge .double_value_done
-    jmp .copy_double_chars
-.double_value_done:
-    push rsi
-    
-    mov rdx, [data_ptr]
-    mov r8, rdx
-    sub r8, data_buffer
-    mov rsi, msg
-    mov rdi, [data_ptr]
-    mov r9, rcx
-    mov rcx, r9
-    rep movsb
-    
-    mov byte [rdi], 0
-    inc rdi
-    mov [data_ptr], rdi
-    
-    mov rcx, rbx
-    shl rcx, 3
-    mov rax, r8
-    mov [sym_values + rcx], rax
-    
-    pop rsi
-    mov [src_ptr], rsi
-    jmp .finish_let
-
-.parse_float_value:
-    mov rsi, [src_ptr]
-    mov rdi, msg
-    xor rcx, rcx
-.copy_float_chars:
-    mov al, [rsi]
-    cmp al, '0'
-    jb .float_value_done
-    cmp al, '9'
-    jbe .copy_float_char
-    cmp al, '.'
-    je .copy_float_char
-    cmp al, '-'
-    je .copy_float_char
-    jmp .float_value_done
-.copy_float_char:
-    mov [rdi], al
-    inc rdi
-    inc rsi
-    inc rcx
-    cmp rcx, 63
-    jge .float_value_done
-    jmp .copy_float_chars
-.float_value_done:
-    push rsi
-    
-    mov rdx, [data_ptr]
-    mov r8, rdx
-    sub r8, data_buffer
-    mov rsi, msg
-    mov rdi, [data_ptr]
-    mov r9, rcx
-    mov rcx, r9
-    rep movsb
-    
-    mov byte [rdi], 0
-    inc rdi
-    mov [data_ptr], rdi
-    
-    mov rcx, rbx
-    shl rcx, 3
-    mov rax, r8
-    mov [sym_values + rcx], rax
-    
-    pop rsi
-    mov [src_ptr], rsi
-    jmp .finish_let
-
-.parse_bool_value:
-    mov r15, [src_ptr]
-    
-    mov rdi, r15
-    mov rsi, kw_true
-    call compare_string
-    cmp rax, 1
-    je .bool_true
-    
-    mov rdi, r15
-    mov rsi, kw_false
-    call compare_string
-    cmp rax, 1
-    je .bool_false
-    
-    jmp .syntax_error
-
-.bool_true:
-    mov rax, 1
-    mov [src_ptr], rsi
-    jmp .save_bool
-
-.bool_false:
-    xor rax, rax
-    mov [src_ptr], rsi
-
-.save_bool:
-    mov rcx, rbx
-    shl rcx, 3
-    mov [sym_values + rcx], rax
-    jmp .finish_let
-
-.finish_let:
-    mov rsi, [src_ptr]
     call skip_whitespace
     mov [src_ptr], rsi
     
@@ -1083,32 +685,280 @@ compile_program:
     inc rsi
     
     mov [src_ptr], rsi
+    
+    cmp byte [current_block], BLOCK_IF
+    je .if_body_loop
+    cmp byte [current_block], BLOCK_ELSE
+    je .else_body_loop
     jmp .compile_loop
 
 .handle_if:
     mov rsi, [src_ptr]
-.skip_if:
-    cmp byte [rsi], ';'
-    je .if_semicolon
-    cmp byte [rsi], 0
-    je .compile_done
+    call skip_whitespace
+    mov [src_ptr], rsi
+    
+    cmp byte [rsi], '('
+    jne .syntax_error
     inc rsi
-    jmp .skip_if
-.if_semicolon:
+    call skip_whitespace
+    mov [src_ptr], rsi
+    
+    call parse_condition
+    test rax, rax
+    jz .syntax_error
+    
+    mov r13b, [cond_operator]
+    
+    mov rdi, [code_ptr]
+    
+    ; mov rax, value
+    mov byte [rdi], 0x48
+    mov byte [rdi + 1], 0xb8
+    mov rax, [cond_left]
+    mov [rdi + 2], rax
+    add rdi, 10
+    
+    ; mov rbx, value
+    mov byte [rdi], 0x48
+    mov byte [rdi + 1], 0xbb
+    mov rax, [cond_right]
+    mov [rdi + 2], rax
+    add rdi, 10
+    
+    ; cmp rax, rbx
+    mov byte [rdi], 0x48
+    mov byte [rdi + 1], 0x39
+    mov byte [rdi + 2], 0xd8
+    add rdi, 3
+    
+    cmp r13b, OP_EQ
+    je .if_jne_skip
+    cmp r13b, OP_NE
+    je .if_je_skip
+    cmp r13b, OP_GT
+    je .if_jle_skip
+    cmp r13b, OP_LT
+    je .if_jge_skip
+    cmp r13b, OP_GE
+    je .if_jl_skip
+    cmp r13b, OP_LE
+    je .if_jg_skip
+    jmp .if_jne_skip
+
+.if_jne_skip:
+    mov byte [rdi], 0x0f
+    mov byte [rdi + 1], 0x85
+    add rdi, 2
+    jmp .if_patch_placeholder
+
+.if_je_skip:
+    mov byte [rdi], 0x0f
+    mov byte [rdi + 1], 0x84
+    add rdi, 2
+    jmp .if_patch_placeholder
+
+.if_jle_skip:
+    mov byte [rdi], 0x0f
+    mov byte [rdi + 1], 0x8e
+    add rdi, 2
+    jmp .if_patch_placeholder
+
+.if_jge_skip:
+    mov byte [rdi], 0x0f
+    mov byte [rdi + 1], 0x8d
+    add rdi, 2
+    jmp .if_patch_placeholder
+
+.if_jl_skip:
+    mov byte [rdi], 0x0f
+    mov byte [rdi + 1], 0x8c
+    add rdi, 2
+    jmp .if_patch_placeholder
+
+.if_jg_skip:
+    mov byte [rdi], 0x0f
+    mov byte [rdi + 1], 0x8f
+    add rdi, 2
+
+.if_patch_placeholder:
+    mov [if_jump_patch], rdi
+    mov dword [rdi], 0
+    add rdi, 4
+    mov [code_ptr], rdi
+    
+    mov rsi, [src_ptr]
+    call skip_whitespace
+    mov [src_ptr], rsi
+    
+    cmp byte [rsi], '{'
+    jne .syntax_error
     inc rsi
     mov [src_ptr], rsi
-    jmp .compile_loop
 
-.handle_while:
+.if_body_loop:
     mov rsi, [src_ptr]
-.skip_while:
-    cmp byte [rsi], ';'
-    je .while_semicolon
+    call skip_whitespace
+    mov [src_ptr], rsi
+    
+    cmp byte [rsi], '}'
+    je .if_body_end
     cmp byte [rsi], 0
     je .compile_done
+    
+    call parse_token
+    mov rdi, current_token
+    
+    mov rsi, kw_print
+    call compare_string
+    cmp rax, 1
+    je .if_body_print
+    
+    mov rsi, kw_let
+    call compare_string
+    cmp rax, 1
+    je .if_body_let
+    
+    mov rsi, kw_int
+    call compare_string
+    cmp rax, 1
+    je .if_body_let
+    
+    mov rsi, kw_if
+    call compare_string
+    cmp rax, 1
+    je .handle_if
+    
+    jmp .if_body_loop
+
+.if_body_print:
+    call .handle_print
+    jmp .if_body_loop
+
+.if_body_let:
+    call .handle_let
+    jmp .if_body_loop
+
+.if_body_end:
+    mov rsi, [src_ptr]
     inc rsi
-    jmp .skip_while
-.while_semicolon:
+    mov [src_ptr], rsi
+    call skip_whitespace
+    mov [src_ptr], rsi
+    
+    call parse_token
+    
+    mov rdi, current_token
+    mov rsi, kw_else
+    call compare_string
+    cmp rax, 1
+    je .if_body_else
+    
+    mov rdi, [if_jump_patch]
+    mov rax, [code_ptr]
+    sub rax, rdi
+    sub rax, 4
+    mov dword [rdi], eax
+    
+    mov rdi, current_token
+    
+    mov rsi, kw_print
+    call compare_string
+    cmp rax, 1
+    je .if_body_print
+    
+    mov rsi, kw_let
+    call compare_string
+    cmp rax, 1
+    je .if_body_let
+    
+    mov rsi, kw_int
+    call compare_string
+    cmp rax, 1
+    je .if_body_let
+    
+    mov rsi, kw_if
+    call compare_string
+    cmp rax, 1
+    je .handle_if
+    
+    jmp .compile_loop
+
+.if_body_else:
+    mov rdi, [code_ptr]
+    mov byte [rdi], 0xe9
+    mov [else_jump_patch], rdi
+    mov dword [rdi + 1], 0
+    add rdi, 5
+    mov [code_ptr], rdi
+    
+    mov rdi, [if_jump_patch]
+    mov rax, [code_ptr]
+    sub rax, rdi
+    sub rax, 4
+    mov dword [rdi], eax
+    
+    mov rsi, [src_ptr]
+    call skip_whitespace
+    mov [src_ptr], rsi
+    
+    cmp byte [rsi], '{'
+    jne .syntax_error
+    inc rsi
+    mov [src_ptr], rsi
+
+.else_body_loop:
+    mov rsi, [src_ptr]
+    call skip_whitespace
+    mov [src_ptr], rsi
+    
+    cmp byte [rsi], '}'
+    je .else_body_end
+    cmp byte [rsi], 0
+    je .compile_done
+    
+    call parse_token
+    mov rdi, current_token
+    
+    mov rsi, kw_print
+    call compare_string
+    cmp rax, 1
+    je .else_body_print
+    
+    mov rsi, kw_let
+    call compare_string
+    cmp rax, 1
+    je .else_body_let
+    
+    mov rsi, kw_int
+    call compare_string
+    cmp rax, 1
+    je .else_body_let
+    
+    jmp .else_body_loop
+
+.else_body_print:
+    call .handle_print
+    jmp .else_body_loop
+
+.else_body_let:
+    call .handle_let
+    jmp .else_body_loop
+
+.else_body_end:
+    mov rsi, [src_ptr]
+    inc rsi
+    mov [src_ptr], rsi
+    
+    mov rdi, [else_jump_patch]
+    mov rax, [code_ptr]
+    sub rax, rdi
+    sub rax, 5
+    mov dword [rdi + 1], eax
+    
+    jmp .compile_loop
+
+.handle_close_brace:
+    mov rsi, [src_ptr]
     inc rsi
     mov [src_ptr], rsi
     jmp .compile_loop
@@ -1150,7 +1000,7 @@ compile_program:
     mov rax, 1
     mov rdi, 1
     mov rsi, error_syntax
-    mov rdx, 28
+    mov rdx, 22
     syscall
     jmp .print_line_and_exit
 
@@ -1158,7 +1008,7 @@ compile_program:
     mov rax, 1
     mov rdi, 1
     mov rsi, error_undefined_var
-    mov rdx, 44
+    mov rdx, 35
     syscall
     
 .print_line_and_exit:
@@ -1266,16 +1116,6 @@ parse_token:
     cmp al, '}'
     je .token_end
     cmp al, '='
-    je .token_end
-    cmp al, '+'
-    je .token_end
-    cmp al, '-'
-    je .token_end
-    cmp al, '*'
-    je .token_end
-    cmp al, '/'
-    je .token_end
-    cmp al, '"'
     je .token_end
     cmp al, 0
     je .token_end
@@ -1423,52 +1263,6 @@ generate_write:
     add rdi, 2
     
     mov [code_ptr], rdi
-    ret
-
-generate_write_string:
-    jmp generate_write
-
-generate_newline:
-    push r8
-    push r9
-    
-    mov rdi, [code_ptr]
-    
-    mov byte [rdi], 0x48
-    mov byte [rdi + 1], 0xb8
-    mov qword [rdi + 2], 1
-    add rdi, 10
-    
-    mov byte [rdi], 0x48
-    mov byte [rdi + 1], 0xbf
-    mov qword [rdi + 2], 1
-    add rdi, 10
-    
-    mov byte [rdi], 0x48
-    mov byte [rdi + 1], 0xbe
-    add rdi, 2
-    
-    mov rax, [patch_count]
-    mov [patch_addrs + rax * 8], rdi
-    mov qword [patch_offsets + rax * 8], 0
-    inc qword [patch_count]
-    
-    mov qword [rdi], 0
-    add rdi, 8
-    
-    mov byte [rdi], 0x48
-    mov byte [rdi + 1], 0xba
-    mov qword [rdi + 2], 1
-    add rdi, 10
-    
-    mov byte [rdi], 0x0f
-    mov byte [rdi + 1], 0x05
-    add rdi, 2
-    
-    mov [code_ptr], rdi
-    
-    pop r9
-    pop r8
     ret
 
 generate_exit:
