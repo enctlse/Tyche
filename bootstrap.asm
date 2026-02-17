@@ -2,14 +2,14 @@ BITS 64
 DEFAULT REL
 
 section .data
-error_no_args db 'Usage: ./tyche <input.ty> <output>', 10, 0
+error_no_args db 'Usage: ./Pine <input.pi> <output>', 10, 0
 error_syntax db 'Syntax error at line ', 0
 error_undefined_var db 'Error: undefined variable at line ', 0
 success db 'Compiled! Run: chmod +x <output> && ./<output>', 10, 0
 line_num_str db '000', 10, 0
 
-TYPE_INT equ 1
-TYPE_STRING equ 2
+piPE_INT equ 1
+piPE_STRING equ 2
 
 OP_EQ equ 1
 OP_NE equ 2
@@ -62,7 +62,7 @@ current_token times 64 db 0
 
 sym_names times 32*32 db 0
 sym_values times 32 dq 0
-sym_types times 32 dq 0
+sym_pipes times 32 dq 0
 sym_count dq 0
 
 header_size equ 120
@@ -642,7 +642,7 @@ compile_program:
     
     mov rcx, rbx
     shl rcx, 3
-    mov qword [sym_types + rcx], TYPE_INT
+    mov qword [sym_pipes + rcx], piPE_INT
     
     mov rsi, [src_ptr]
     call skip_whitespace

@@ -3,3 +3,4 @@ tyche
 *.bin
 test*
 TEST*
+output*

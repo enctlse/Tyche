@@ -1,12 +1,12 @@
 .PHONY: all clean
 
-all: tyche
+all: Pine
 
-tyche: bootstrap.o
-	ld bootstrap.o -o tyche
+Pine: bootstrap.o
+	ld bootstrap.o -o Pine
 
 bootstrap.o: bootstrap.asm
 	nasm -f elf64 bootstrap.asm -o bootstrap.o
 
 clean:
-	rm -f bootstrap.o tyche
+	rm -f bootstrap.o Pine
