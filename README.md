@@ -1,14 +1,10 @@
-# Tyche Language
+# Pine Language
 
-<p align="center">
-  <img src="docs/logo.png" alt="Tyche Logo" width="200"/>
-</p>
-
-A compiled programming language with static typing for x86_64 architecture. Compiles source code directly to native Linux ELF binaries.
+A compiled programming language with static piping for x86_64 architecture. Compiles source code directly to native Linux ELF binaries.
 
 ## Features
 
-- **Static Typing**: `int`, `string`, `float`, `double`, `bool`
+- **Static piping**: `int`, `string`, `float`, `double`, `bool`
 - **Native Code Compilation**: generates native x86_64 ELF binaries
 - **C-like Syntax**: familiar syntax for developers
 - **Built-in Operations**: arithmetic, conditionals, loops, functions, structs
@@ -18,32 +14,32 @@ A compiled programming language with static typing for x86_64 architecture. Comp
 
 ```bash
 # Clone repository
-git clone https://github.com/yourusername/tyche.git
-cd tyche
+git clone https://github.com/enctlse/Pine.git
+cd Pine
 
 # Build (requires NASM)
 make
 
 # Or manually
 nasm -f elf64 bootstrap.asm -o bootstrap.o
-ld bootstrap.o -o tyche
+ld bootstrap.o -o Pine
 
 # Run
-chmod +x tyche
+chmod +x Pine
 ```
 
 ## Quick Start
 
-Create a file `hello.ty`:
+Create a file `hello.pi`:
 
-```tyche
+```Pine
 print("Hello, World!");
 ```
 
 Compile and run:
 
 ```bash
-./tyche hello.ty hello
+./Pine hello.pi hello
 chmod +x hello
 ./hello
 ```
@@ -52,16 +48,16 @@ chmod +x hello
 
 ### Variables
 
-```tyche
+```Pine
 let x: int = 10;
-let name: string = "Tyche";
+let name: string = "Pine";
 let active: bool = true;
 let pi: float = 3.14;
 ```
 
 ### Arithmetic
 
-```tyche
+```Pine
 let a: int = 10 + 5 * 2;      // 20
 let b: float = (10.5 + 2.3) / 2.0;
 let c: int = a % 3;           // modulo
@@ -69,7 +65,7 @@ let c: int = a % 3;           // modulo
 
 ### Conditionals
 
-```tyche
+```Pine
 if x > 10 {
     print("Greater than 10");
 } else if x < 5 {
@@ -81,7 +77,7 @@ if x > 10 {
 
 ### Loops
 
-```tyche
+```Pine
 // while loop
 let i: int = 0;
 while i < 10 {
@@ -97,7 +93,7 @@ for j in 0..10 {
 
 ### Functions
 
-```tyche
+```Pine
 func add(a: int, b: int) -> int {
     return a + b;
 }
@@ -109,7 +105,7 @@ func greet(name: string) -> void {
 
 ### Structs
 
-```tyche
+```Pine
 struct Point {
     x: int;
     y: int;
@@ -119,9 +115,9 @@ let p: Point = Point { x: 10, y: 20 };
 print(p.x);
 ```
 
-## Data Types
+## Data pipes
 
-| Type | Description | Example |
+| pipe | Description | Example |
 |------|-------------|---------|
 | `int` | 64-bit integer | `42` |
 | `float` | 32-bit floating point | `3.14` |
@@ -164,7 +160,7 @@ print(p.x);
 
 ### Calculator
 
-```tyche
+```Pine
 func calc(a: int, b: int, op: string) -> int {
     if op == "+" {
         return a + b;
@@ -184,7 +180,7 @@ print(result);  // 50
 
 ### Recursion (factorial)
 
-```tyche
+```Pine
 func factorial(n: int) -> int {
     if n <= 1 {
         return 1;
@@ -199,7 +195,7 @@ print(f);  // 120
 ## Compiler Architecture
 
 ```
-Source (.ty)  -->  Lexer  -->  Parser  -->  CodeGen  -->  ELF Binary
+Source (.pi)  -->  Lexer  -->  Parser  -->  CodeGen  -->  ELF Binary
 ```
 
 1. **Lexer** - tokenize source code
@@ -228,7 +224,7 @@ make clean
 Test files are located in the root directory:
 
 ```bash
-./tyche test.ty test_binary
+./Pine test.pi test_binary
 ```
 
 ## License
@@ -237,4 +233,4 @@ MIT License
 
 ## Author
 
-[Your Name]
+@enctlse
