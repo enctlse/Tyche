@@ -21,8 +21,8 @@ cd Pine
 make
 
 # Or manually
-nasm -f elf64 bootstrap.asm -o bootstrap.o
-ld bootstrap.o -o Pine
+nasm -f elf64 Pinecompiler.asm -o Pinecompiler.o
+ld Pinecompiler.o -o Pine
 
 # Run
 chmod +x Pine
