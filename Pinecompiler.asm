@@ -410,6 +410,9 @@ compile_program:
     cmp byte [rsi], '}'
     je .handle_close_brace
     
+    mov rdi, current_token
+    mov byte [rdi], 0
+    
     call parse_token
     
     mov rdi, current_token
@@ -514,7 +517,8 @@ compile_program:
     inc rcx
     mov [msg_len], rcx
     
-    push rsi
+    push rdi
+    push rcx
     mov rsi, rdi
     mov rdi, [data_ptr]
     mov r8, [data_ptr]
@@ -526,8 +530,12 @@ compile_program:
     
     call generate_write
     
-    pop rsi
-    mov [src_ptr], rsi
+    pop rcx
+    pop rdi
+    jmp .print_continue
+
+.print_continue:
+    mov rsi, [src_ptr]
     call skip_whitespace
     mov [src_ptr], rsi
     jmp .print_end

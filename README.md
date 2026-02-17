@@ -66,9 +66,9 @@ let c: int = a % 3;           // modulo
 ### Conditionals
 
 ```Pine
-if x > 10 {
+if (x > 10) {
     print("Greater than 10");
-} else if x < 5 {
+} else if (x < 5) {
     print("Less than 5");
 } else {
     print("Between 5 and 10");
@@ -162,13 +162,13 @@ print(p.x);
 
 ```Pine
 func calc(a: int, b: int, op: string) -> int {
-    if op == "+" {
+    if (op == "+") {
         return a + b;
-    } else if op == "-" {
+    } else if (op == "-") {
         return a - b;
-    } else if op == "*" {
+    } else if (op == "*") {
         return a * b;
-    } else if op == "/" {
+    } else if (op == "/") {
         return a / b;
     }
     return 0;
@@ -182,7 +182,7 @@ print(result);  // 50
 
 ```Pine
 func factorial(n: int) -> int {
-    if n <= 1 {
+    if (n <= 1) {
         return 1;
     }
     return n * factorial(n - 1);
