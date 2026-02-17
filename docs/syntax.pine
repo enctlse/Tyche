@@ -1,6 +1,6 @@
-// Файл: docs/syntax_v2.tyche
+// Файл: docs/syntax_v2.Pine
 
-=== Tyche Language Syntax v2 ===
+=== Pine Language Syntax v2 ===
 
 1. Комментарии:
    // Однострочный
@@ -8,7 +8,7 @@
 
 2. Переменные (с явными типами):
    let x: int = 10;
-   let name: string = "Tyche";
+   let name: string = "Pine";
    let active: bool = true;
    let pi: float = 3.14;
 
